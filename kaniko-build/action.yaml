@@ -1,0 +1,109 @@
+name: Build image with Kaniko
+
+description: |
+  This action build an OCI image with Kaniko.
+
+inputs:
+  registry:
+    description: registry url
+    required: false
+  registry-user:
+    description: registry username
+    required: false
+  registry-password:
+    description: registry password
+    required: false
+  context:
+    description: context flag
+    default: ${{ github.workspace }}
+    required: false
+  cache:
+    description: enable cache flag
+    required: false
+  cache-repo:
+    description: cache repo flag
+    required: false
+  dockerfile:
+    description: dockerfile flag
+    default: Dockerfile
+    required: false
+  no-push:
+    description: whether to push the image to the registry
+    required: false
+    default: "true"
+  tags:
+    description: list of image tags
+    required: true
+  labels:
+    description: list of image labels
+    required: false
+  test:
+    description: run this action in test mode
+    required: false
+    default: "false"
+  aws-helper:
+    description: whether to use aws helper
+    required: false
+    default: "false"
+  docker-config-path:
+    description: path to docker config
+    required: false
+    default: "/home/runner/.docker"
+  reproducible:
+    description: whether to use reproducible flag
+    required: false
+    default: "false"
+
+outputs:
+  image-tarball-path:
+    value: ${{ steps.build.outputs.image-tarball-path }}
+    description: path to image tarball
+
+runs:
+  using: composite
+  steps:
+    - id: build
+      run: |
+        set -o errexit
+
+        # Build docker kargs
+        [ -n "${{ inputs.dockerfile }}" ] && kargs="$kargs --dockerfile ${{ inputs.dockerfile }} "
+        [ -n "${{ inputs.cache }}" ] && kargs="$kargs --cache "
+        [ -n "${{ inputs.cache-repo }}" ] && kargs="$kargs --cache-repo ${{ inputs.cache-repo }} "
+        [ "${{ inputs.no-push }}" == 'true' ] && kargs="$kargs --no-push "
+        [ -n "${{ inputs.context }}" ] && kargs="$kargs --context dir://${{ inputs.context }} "
+        [ "${{ inputs.reproducible }}" == 'true' ] && kargs="$kargs --reproducible "
+
+        # TODO: read tar-path from input
+        IMAGE_TARBALL_PATH="${{ github.workspace }}/image.tar"
+        kargs="$kargs --tar-path $IMAGE_TARBALL_PATH "
+
+        TAGS=(${{ inputs.tags }})
+        for tag in "${TAGS[@]}"; do
+            kargs="$kargs --destination $tag "
+        done
+
+        # Replace `spaces` by `-`
+        LABELS=($(echo "${{ inputs.labels }}" | tr ' ' '-'))
+        for label in "${LABELS[@]}"; do
+            kargs="$kargs --label \"$label\" "
+        done
+
+        # Execute kaniko build command
+        echo "Kaniko flags: $kargs"
+
+        if [ "${{ inputs.test }}" = "true" ]; then
+          echo "Test mode: skipping build"
+        else
+          echo "Building image..."
+
+          docker run --rm \
+            -v ${{ inputs.docker-config-path }}:/kaniko/.docker:ro \
+            -v ${{ github.workspace }}:${{ github.workspace }}:rw \
+            --workdir ${{ github.workspace }} \
+            gcr.io/kaniko-project/executor:v1.9.1 $kargs
+
+          echo "Image tarball is located at $IMAGE_TARBALL_PATH"
+          echo "image-tarball-path=$IMAGE_TARBALL_PATH" >> $GITHUB_OUTPUT
+        fi
+      shell: bash
